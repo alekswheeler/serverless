@@ -2,10 +2,30 @@ import { APIGatewayProxyHandler } from "aws-lambda";
 
 import { document } from "../utils/dynamodbClient";
 
+import chromium from "chrome-aws-lambda";
+import { compile } from "handlebars";
+import { readFileSync } from "fs";
+import {join} from "path";
+import dayjs from "dayjs";
+
 interface ICreateCertificate{
   id: string;
   name: string;
   grade: string;
+}
+
+interface ITemplate{
+  id: string;
+  name: string;
+  grade: string;
+  medal: string;
+  date: string;
+}
+
+const compileTemplate = async (data: ITemplate) => {
+  const filePath = join(process.cwd(), "src", "tempalates", "certificate.hbs");
+  const html = readFileSync(filePath, "utf-8");
+  return compile(html)(data);
 }
 
 // Event responsável por traser os dados
@@ -30,6 +50,41 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     }
   }).promise();
 
+  const medalPath = join(process.cwd(), "src", "templates", "selo.png");
+  const medal = readFileSync(medalPath, "base64");
+
+  const data: ITemplate = {
+    name,
+    id,
+    grade,
+    date: dayjs().format("DD/MM/YYYY"),
+    medal
+  };
+
+  const content = await compileTemplate(data);
+
+  //Permite simular a criação de uma página em um browser para a geração do PDF
+  const browser = await chromium.puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath,
+    headless: chromium.headless
+  });
+
+  const page = await browser.newPage();
+
+  await page.setContent(content);
+
+  const pdf = await page.pdf({
+    format: "a4",
+    landscape: true,
+    printBackground: true,
+    preferCSSPageSize: true,
+    path: process.env.IS_OFFLINE ? "./certificate.pdf" : null
+  });
+
+  await browser.close();
+  
   return {
     statusCode: 201,
     body: JSON.stringify(response.Items[0]),
